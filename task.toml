@@ -6,8 +6,10 @@ name = "local/asteroid-visibility-audit"
 title = "近地小天体可见窗口审计"
 description = "修复一个对近地小天体进行地面观测可见窗口审计的确定性程序。"
 authors = [{ name = "xyj" }]
+difficulty = "hard"
 
 [agent]
+entrypoint = "solution/solve.sh"
 timeout_sec = 900
 
 [environment]
@@ -15,9 +17,9 @@ dockerfile = "environment/Dockerfile"
 network_mode = "public"
 
 [verifier]
+entrypoint = "tests/test.sh"
 timeout_sec = 180
 
 [metadata]
-difficulty = "hard"
 category = "astronomy-space"
 tags = ["astronomy", "observing", "spherical-geometry", "time-series"]

@@ -73,6 +73,10 @@ def stage(dst,data):
   return tmp
  except Exception:tmp.unlink(missing_ok=True);raise
 def commit(report,log,value,fingerprint):
+ # A directory cannot be atomically replaced by a report or ledger file.  Reject
+ # before staging either target so a bad second destination cannot replace the first.
+ if any(path.exists() and not path.is_file() for path in (report,log)):
+  raise Reject('IO')
  events=ledger(log)
  if fingerprint not in {x['fingerprint'] for x in events}:events.append({'fingerprint':fingerprint,'observer_id':value['observer_id'],'status':value['status']})
  pending=[]
