@@ -3,9 +3,9 @@ allow_internet = true
 
 [task]
 name = "local/asteroid-visibility-audit"
-title = "近地小天体多台站风险与可见性审计"
 description = "修复一个传播近地小天体轨道、审计近距离风险并规划多台站观测窗口的确定性程序。"
 authors = [{ name = "xyj" }]
+keywords = ["astronomy", "orbital-mechanics", "topocentric-geometry", "observing"]
 
 [agent]
 entrypoint = "solution/solve.sh"
@@ -20,6 +20,7 @@ entrypoint = "tests/test.sh"
 timeout_sec = 1800
 
 [metadata]
-difficulty = "hard"
+title = "近地小天体多台站风险与可见性审计"
+difficulty = "expert"
 category = "astronomy-space"
 tags = ["astronomy", "orbital-mechanics", "topocentric-geometry", "observing"]
