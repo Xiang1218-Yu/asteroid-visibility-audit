@@ -1,5 +1,9 @@
 #!/bin/sh
+# The verifier result is the reward file; candidate test failures are ordinary
+# benchmark outcomes, not verifier crashes. Every other path leaves an atomic
+# zero reward behind.
 set -u
+umask 077
 export PYTHONDONTWRITEBYTECODE=1
 TESTS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ "$TESTS_DIR" = "/tests" ]; then
@@ -10,70 +14,135 @@ else
   REWARD_FILE=${REWARD_FILE:-"$ROOT/reward.txt"}
   export PROGRAM_DIR=${PROGRAM_DIR:-"$ROOT/environment"}
 fi
-mkdir -p "$(dirname -- "$REWARD_FILE")"
-printf '0.000000\n' > "$REWARD_FILE"
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-python3 -m venv "$TMP/venv" || exit 1
-"$TMP/venv/bin/python" -m pip install --no-index --find-links "$TESTS_DIR/wheels" --require-hashes -r "$TESTS_DIR/requirements-test.txt" || exit 1
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest --collect-only -q "$TESTS_DIR/test_visibility.py" >"$TMP/collect.txt" 2>&1 || exit 1
+
+write_zero() {
+  python3 - "$REWARD_FILE" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+tmp = path.parent / f".{path.name}.zero-{os.getpid()}"
+try:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write("0.000000\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+finally:
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
+PY
+}
+
+write_zero || exit 0
+TMP=$(mktemp -d) || exit 0
+trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+python3 -m venv "$TMP/venv" || exit 0
+"$TMP/venv/bin/python" -m pip install --no-index --find-links "$TESTS_DIR/wheels" --require-hashes -r "$TESTS_DIR/requirements-test.txt" || exit 0
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest --collect-only -q "$TESTS_DIR/test_visibility.py" >"$TMP/collect.txt" 2>&1 || exit 0
 set +e
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml"
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
 status=$?
 set -e
+cat "$TMP/pytest.log"
+
 python3 - "$TMP/results.xml" "$REWARD_FILE" "$status" <<'SCOREPY'
+import math
+import os
 import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 GROUPS = {
-    "geometry": {
-        "test_sidereal_rotation_changes_visibility_within_window",
-        "test_spherical_altitude_uses_latitude_declination_and_hour_angle",
-        "test_equality_at_altitude_and_solar_threshold_is_visible",
+    "orbital_dynamics": {
+        "test_kepler_propagation_uses_eccentric_periapsis_distance",
+        "test_midpoint_risk_candidate_detects_between_sample_close_approach",
+        "test_inclination_rotation_and_obliquity_control_station_altitude",
     },
-    "solar_windows": {
-        "test_solar_avoidance_blocks_high_altitude_target",
-        "test_final_irregular_sample_and_visibility_gap_split_windows",
-        "test_minimum_window_yields_brief_status",
+    "observing_geometry": {
+        "test_earth_occultation_overrides_permissive_horizon_limit",
+        "test_near_horizon_refraction_can_meet_apparent_altitude_limit",
+        "test_solar_avoidance_rejects_an_otherwise_high_target",
+        "test_final_nonintegral_sampling_endpoint_is_included",
     },
-    "rejection": {
-        "test_boolean_and_extra_key_rejection_preserve_two_outputs",
-        "test_nonfinite_and_range_rejection_preserve_two_outputs",
-        "test_corrupt_ledger_preserves_report_ledger_and_directory",
-        "test_output_target_rejection_preserves_report_ledger_and_directory",
+    "network_decision": {
+        "test_short_visible_window_is_brief_not_trackable",
+        "test_widely_separated_qualified_stations_enable_stereo_tracking",
+        "test_narrow_station_separation_is_not_stereo_tracking",
     },
-    "durability": {
-        "test_report_is_compact_sorted_lf_and_rounded",
-        "test_same_input_deduplicates_canonical_ledger_event",
-        "test_distinct_input_appends_ledger_event",
-        "test_success_is_byte_stable_without_temp_files",
+    "integrity": {
+        "test_duplicate_station_identifier_is_rejected_without_side_effects",
+        "test_earth_intersecting_orbit_is_rejected_without_side_effects",
+        "test_compact_sorted_output_has_required_public_fields",
+        "test_same_canonical_input_deduplicates_ledger_event",
+        "test_corrupt_ledger_is_rejected_without_side_effects",
+        "test_directory_ledger_target_is_rejected_without_partial_report_update",
+        "test_repeated_success_is_byte_stable_and_leaves_no_temp_files",
     },
 }
-WEIGHTS = {"geometry": 0.35, "solar_windows": 0.27, "rejection": 0.22, "durability": 0.16}
+WEIGHTS = {
+    "orbital_dynamics": 0.38,
+    "observing_geometry": 0.29,
+    "network_decision": 0.21,
+    "integrity": 0.12,
+}
+
+
+def atomic_reward(path: Path, score: float) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.score-{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(f"{score:.6f}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
 
 score = 0.0
 try:
-    if int(sys.argv[3]) != 0:
-        raise RuntimeError("test execution failed")
+    # pytest uses 0 for all pass and 1 for ordinary assertion failures. Any
+    # other code is a collection/internal interruption and is fail-closed.
+    if int(sys.argv[3]) not in (0, 1):
+        raise RuntimeError("pytest did not complete a normal test run")
     root = ET.parse(sys.argv[1]).getroot()
     outcomes = {}
     for case in root.findall(".//testcase"):
         name = case.attrib.get("name", "")
+        if not name or name in outcomes:
+            raise RuntimeError("JUnit test set is invalid")
         outcomes[name] = all(case.find(tag) is None for tag in ("failure", "error", "skipped"))
     expected = set().union(*GROUPS.values())
-    if set(outcomes) != expected or not all(outcomes.values()):
-        raise RuntimeError("test result set is incomplete or non-passing")
-    group_score = {
-        group: sum(outcomes[name] for name in names) / len(names)
+    if set(outcomes) != expected:
+        raise RuntimeError("JUnit test set is incomplete or unexpected")
+    if set(GROUPS) != set(WEIGHTS) or not math.isclose(sum(WEIGHTS.values()), 1.0, abs_tol=1e-12):
+        raise RuntimeError("invalid group weights")
+    group_passes = {group: sum(outcomes[name] for name in names) for group, names in GROUPS.items()}
+    score = sum(
+        WEIGHTS[group] * group_passes[group] / len(names)
         for group, names in GROUPS.items()
-    }
-    computed = sum(WEIGHTS[group] * group_score[group] for group in GROUPS)
-    if abs(computed - 1.0) > 1e-12:
-        raise RuntimeError("unexpected full score")
-    score = computed
+    )
+    # A no-op must not receive incidental credit from generic geometry or
+    # filesystem checks. At least one orbital and one network-decision
+    # contract must pass before partial credit is meaningful.
+    if group_passes["orbital_dynamics"] == 0 or group_passes["network_decision"] == 0:
+        score = 0.0
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        raise RuntimeError("non-finite score")
 except Exception:
     score = 0.0
-with open(sys.argv[2], "w", encoding="utf-8") as stream:
-    stream.write(f"{score:.6f}\n")
+atomic_reward(Path(sys.argv[2]), score)
 SCOREPY
-exit "$status"
+# A valid test run may contain candidate failures; Harbor consumes reward.txt.
+exit 0

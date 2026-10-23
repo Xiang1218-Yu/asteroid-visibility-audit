@@ -3,14 +3,13 @@ allow_internet = true
 
 [task]
 name = "local/asteroid-visibility-audit"
-title = "近地小天体可见窗口审计"
-description = "修复一个对近地小天体进行地面观测可见窗口审计的确定性程序。"
+title = "近地小天体多台站风险与可见性审计"
+description = "修复一个传播近地小天体轨道、审计近距离风险并规划多台站观测窗口的确定性程序。"
 authors = [{ name = "xyj" }]
-difficulty = "hard"
 
 [agent]
 entrypoint = "solution/solve.sh"
-timeout_sec = 900
+timeout_sec = 3600
 
 [environment]
 dockerfile = "environment/Dockerfile"
@@ -18,8 +17,9 @@ network_mode = "public"
 
 [verifier]
 entrypoint = "tests/test.sh"
-timeout_sec = 180
+timeout_sec = 1800
 
 [metadata]
+difficulty = "hard"
 category = "astronomy-space"
-tags = ["astronomy", "observing", "spherical-geometry", "time-series"]
+tags = ["astronomy", "orbital-mechanics", "topocentric-geometry", "observing"]
