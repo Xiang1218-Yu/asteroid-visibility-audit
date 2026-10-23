@@ -1,29 +1,24 @@
 #!/bin/sh
-# Candidate failures are ordinary benchmark outcomes. Infrastructure failures
-# leave an atomic zero behind and are reported as incomplete.
+# The verifier always starts from a fail-closed reward. Candidate failures are
+# ordinary benchmark results; verifier/infrastructure failures remain zero.
 set -u
 umask 077
-export PYTHONDONTWRITEBYTECODE=1
-TESTS_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+TRUSTED_PYTHON=/usr/local/bin/python3
+TRUSTED_TIMEOUT=/usr/bin/timeout
+TESTS_DIR=$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && pwd)
 if [ "$TESTS_DIR" = "/tests" ]; then
   REWARD_FILE=${REWARD_FILE:-/logs/verifier/reward.txt}
-  export PROGRAM_DIR=${PROGRAM_DIR:-/app}
-  SCORER=/tests/score.py
-  SCORING=/tests/scoring.json
+  CANDIDATE_DIR=${PROGRAM_DIR:-/app}
 else
   ROOT=$(CDPATH= cd -- "$TESTS_DIR/.." && pwd)
   REWARD_FILE=${REWARD_FILE:-"$ROOT/reward.txt"}
-  export PROGRAM_DIR=${PROGRAM_DIR:-"$ROOT/environment"}
-  SCORER="$TESTS_DIR/score.py"
-  SCORING="$TESTS_DIR/scoring.json"
+  CANDIDATE_DIR=${PROGRAM_DIR:-"$ROOT/environment"}
 fi
 
-rm -f "$REWARD_FILE" 2>/dev/null || true
-mkdir -p "$(dirname "$REWARD_FILE")" 2>/dev/null || true
-echo "0.000000" >"$REWARD_FILE" 2>/dev/null || exit 0
-
 write_reward_zero() {
-  python3 - "$REWARD_FILE" <<'PY'
+  env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp TMPDIR=/tmp \
+    "$TRUSTED_PYTHON" -S -s -P -B - "$REWARD_FILE" <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -46,34 +41,79 @@ finally:
 PY
 }
 
+finish_zero() {
+  write_reward_zero || true
+  /bin/chmod 0444 "$REWARD_FILE" 2>/dev/null || true
+  exit 0
+}
+
 write_reward_zero || exit 0
-TMP=$(mktemp -d) || exit 0
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
-python3 -m venv "$TMP/venv" || exit 0
-"$TMP/venv/bin/python" -m pip install --no-index --find-links "$TESTS_DIR/wheels" --require-hashes -r "$TESTS_DIR/requirements-test.txt" || exit 0
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest --collect-only -q "$TESTS_DIR/test_visibility.py" >"$TMP/collect.txt" 2>&1 || exit 0
+TMP=$(/usr/bin/mktemp -d) || finish_zero
+SITE_PACKAGES="$TMP/site"
+trap '/bin/rm -rf "$TMP"' EXIT HUP INT TERM
+
+# Wheels are extracted by the fixed interpreter. No pip, user site, startup
+# hook, PATH lookup, or candidate directory participates in verifier imports.
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$TMP" TMPDIR=/tmp \
+  "$TRUSTED_PYTHON" -S -s -P -B - "$TESTS_DIR/wheels" "$SITE_PACKAGES" <<'PY' || finish_zero
+from pathlib import Path
+import sys
+import zipfile
+
+wheels, target = map(Path, sys.argv[1:])
+target.mkdir(parents=True, exist_ok=True)
+for wheel in sorted(wheels.glob("*.whl")):
+    with zipfile.ZipFile(wheel) as archive:
+        archive.extractall(target)
+PY
+
+# Record discovery through the same trusted, isolated import route used below.
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$TMP" TMPDIR=/tmp \
+  PROGRAM_DIR="$CANDIDATE_DIR" \
+  PYTHONPATH="$SITE_PACKAGES:/tests" \
+  PYTHONNOUSERSITE=1 \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  "$TRUSTED_PYTHON" -S -s -P -B -m pytest \
+  -p no:cacheprovider --collect-only -q "$TESTS_DIR/test_visibility.py" \
+  >"$TMP/collect.txt" 2>&1 || finish_zero
 cat "$TMP/collect.txt"
 
 set +e
-if command -v timeout >/dev/null 2>&1; then
-  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 timeout --signal=TERM --kill-after=10 1500 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
-else
-  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
-fi
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$TMP" TMPDIR=/tmp \
+  PROGRAM_DIR="$CANDIDATE_DIR" \
+  PYTHONPATH="$SITE_PACKAGES:/tests" \
+  PYTHONNOUSERSITE=1 \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  "$TRUSTED_TIMEOUT" --signal=TERM --kill-after=10s 1500s \
+  "$TRUSTED_PYTHON" -S -s -P -B -m pytest \
+  -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" \
+  --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
 pytest_status=$?
 set -e
 cat "$TMP/pytest.log"
 
 if ! test -s "$TMP/results.xml"; then
   echo "INCOMPLETE missing or empty JUnit report" >&2
-  write_reward_zero || exit 0
-  chmod 0444 "$REWARD_FILE" 2>/dev/null || true
-  exit 0
+  finish_zero
 fi
 
+# A nonempty file is not sufficient: reject malformed or non-JUnit XML before scoring.
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$TMP" TMPDIR=/tmp \
+  "$TRUSTED_PYTHON" -S -s -P -B - "$TMP/results.xml" <<'PY' || finish_zero
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+if root.tag not in {"testsuite", "testsuites"} or not root.findall(".//testcase"):
+    raise ValueError("JUnit has no test cases")
+PY
+
 set +e
-python3 "$SCORER" \
-  --config "$SCORING" \
+env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$TMP" TMPDIR=/tmp \
+  PYTHONPATH="$SITE_PACKAGES:/tests" \
+  PYTHONNOUSERSITE=1 \
+  "$TRUSTED_PYTHON" -S -s -P -B "$TESTS_DIR/score.py" \
+  --config "$TESTS_DIR/scoring.json" \
   --junit "$TMP/results.xml" \
   --report-out "$TMP/scoring-report.json" \
   --reward-out "$REWARD_FILE"
@@ -81,13 +121,13 @@ scoring_status=$?
 set -e
 if [ "$scoring_status" -ne 0 ] || ! test -s "$TMP/scoring-report.json" || ! test -s "$REWARD_FILE"; then
   echo "INCOMPLETE weighted scoring failed" >&2
-  write_reward_zero || exit 0
+  finish_zero
 fi
 
 if [ "$pytest_status" -ne 0 ] && [ "$pytest_status" -ne 1 ]; then
   echo "INCOMPLETE pytest did not complete a normal run" >&2
-  write_reward_zero || exit 0
+  finish_zero
 fi
 
-chmod 0444 "$REWARD_FILE" 2>/dev/null || true
+/bin/chmod 0444 "$REWARD_FILE" 2>/dev/null || true
 exit 0
