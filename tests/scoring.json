@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "gate_tests": [
+    "tests/test_visibility.py::test_kepler_propagation_uses_eccentric_periapsis_distance"
+  ],
+  "tests": {
+    "tests/test_visibility.py::test_midpoint_risk_candidate_detects_between_sample_close_approach": {
+      "weight": 0.19,
+      "rationale": "相邻正式采样之间的真实最近接近决定风险分级；遗漏中点候选会把近地事件误判为安全。"
+    },
+    "tests/test_visibility.py::test_inclination_rotation_and_obliquity_control_station_altitude": {
+      "weight": 0.19,
+      "rationale": "轨道姿态与黄赤转换共同决定站心视线；旋转错误会系统性扭曲高纬台站高度角和可见性。"
+    },
+    "tests/test_visibility.py::test_earth_occultation_overrides_permissive_horizon_limit": {
+      "weight": 0.0725,
+      "rationale": "地球遮挡是硬几何边界；被遮挡目标误判可见会制造不存在的观测窗口。"
+    },
+    "tests/test_visibility.py::test_near_horizon_refraction_can_meet_apparent_altitude_limit": {
+      "weight": 0.0725,
+      "rationale": "近地平可见资格依赖折射后的表观高度；忽略折射会错误拒绝真实可观测目标。"
+    },
+    "tests/test_visibility.py::test_solar_avoidance_rejects_an_otherwise_high_target": {
+      "weight": 0.0725,
+      "rationale": "太阳规避是观测安全边界；高高度不能抵销太阳角距不足。"
+    },
+    "tests/test_visibility.py::test_final_nonintegral_sampling_endpoint_is_included": {
+      "weight": 0.0725,
+      "rationale": "末端时刻必须进入正式样本；遗漏非整步长终点会漏掉末端风险与可见性判定。"
+    },
+    "tests/test_visibility.py::test_short_visible_window_is_brief_not_trackable": {
+      "weight": 0.07,
+      "rationale": "最短跟踪时长区分短暂可见与合格跟踪；短窗口误报可跟踪会夸大任务可执行性。"
+    },
+    "tests/test_visibility.py::test_widely_separated_qualified_stations_enable_stereo_tracking": {
+      "weight": 0.07,
+      "rationale": "立体跟踪需要同刻合格且经度差达到门槛的台站，足够基线才能形成有效视差。"
+    },
+    "tests/test_visibility.py::test_narrow_station_separation_is_not_stereo_tracking": {
+      "weight": 0.07,
+      "rationale": "窄经度基线不得冒充立体跟踪；误报会掩盖观测几何不足。"
+    },
+    "tests/test_visibility.py::test_duplicate_station_identifier_is_rejected_without_side_effects": {
+      "weight": 0.017143,
+      "rationale": "台站 ID 必须全局唯一，拒收时不得改写既有报告、账本或留下临时文件。"
+    },
+    "tests/test_visibility.py::test_earth_intersecting_orbit_is_rejected_without_side_effects": {
+      "weight": 0.017143,
+      "rationale": "近地点穿地轨道必须拒收，且失败路径要完整保持持久化状态。"
+    },
+    "tests/test_visibility.py::test_compact_sorted_output_has_required_public_fields": {
+      "weight": 0.017143,
+      "rationale": "公共报告需有限数值、六位小数、精确顶层字段集合、紧凑键序和 LF 结尾。"
+    },
+    "tests/test_visibility.py::test_same_canonical_input_deduplicates_ledger_event": {
+      "weight": 0.017143,
+      "rationale": "规范输入指纹去重保证账本事件语义与重放一致性。"
+    },
+    "tests/test_visibility.py::test_corrupt_ledger_is_rejected_without_side_effects": {
+      "weight": 0.017143,
+      "rationale": "损坏账本属于命名拒收；失败必须保留旧报告、旧账本并清理临时文件。"
+    },
+    "tests/test_visibility.py::test_directory_ledger_target_is_rejected_without_partial_report_update": {
+      "weight": 0.017143,
+      "rationale": "两个输出目标必须原子替换；账本目标不可写时不得先更新报告或遗留半成品。"
+    },
+    "tests/test_visibility.py::test_repeated_success_is_byte_stable_and_leaves_no_temp_files": {
+      "weight": 0.017142,
+      "rationale": "相同合法输入重复成功后报告与账本必须逐字节稳定，且目录不残留临时文件。"
+    }
+  }
+}
