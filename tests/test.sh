@@ -15,7 +15,13 @@ else
   export PROGRAM_DIR=${PROGRAM_DIR:-"$ROOT/environment"}
 fi
 
-write_zero() {
+# Fail closed before any dependency or test work begins. Later writes replace
+# this value atomically only after a complete, valid test run.
+rm -f "$REWARD_FILE" 2>/dev/null || true
+mkdir -p "$(dirname "$REWARD_FILE")" 2>/dev/null || true
+echo "0.000000" >"$REWARD_FILE" 2>/dev/null || exit 0
+
+write_reward_zero() {
   python3 - "$REWARD_FILE" <<'PY'
 import os
 import sys
@@ -39,14 +45,18 @@ finally:
 PY
 }
 
-write_zero || exit 0
+write_reward_zero || exit 0
 TMP=$(mktemp -d) || exit 0
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 python3 -m venv "$TMP/venv" || exit 0
 "$TMP/venv/bin/python" -m pip install --no-index --find-links "$TESTS_DIR/wheels" --require-hashes -r "$TESTS_DIR/requirements-test.txt" || exit 0
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest --collect-only -q "$TESTS_DIR/test_visibility.py" >"$TMP/collect.txt" 2>&1 || exit 0
 set +e
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
+if command -v timeout >/dev/null 2>&1; then
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 timeout --signal=TERM --kill-after=10 1500 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
+else
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 "$TMP/venv/bin/python" -m pytest -p no:cacheprovider -q "$TESTS_DIR/test_visibility.py" --junitxml="$TMP/results.xml" >"$TMP/pytest.log" 2>&1
+fi
 status=$?
 set -e
 cat "$TMP/pytest.log"
@@ -145,4 +155,5 @@ except Exception:
 atomic_reward(Path(sys.argv[2]), score)
 SCOREPY
 # A valid test run may contain candidate failures; Harbor consumes reward.txt.
+chmod 0444 "$REWARD_FILE" 2>/dev/null || true
 exit 0

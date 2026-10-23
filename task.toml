@@ -12,6 +12,13 @@ timeout_sec = 3600
 
 [environment]
 network_mode = "public"
+build_timeout_sec = 900
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0
+allow_internet = true
+workdir = "/app"
 
 [verifier]
 timeout_sec = 1800
@@ -21,3 +28,5 @@ title = "近地小天体多台站风险与可见性审计"
 difficulty = "expert"
 category = "astronomy-space"
 tags = ["astronomy", "orbital-mechanics", "topocentric-geometry", "observing"]
+expert_time_estimate = "4h"
+description = "修复一个传播近地小天体轨道、审计近距离风险并规划多台站观测窗口的确定性程序。"
